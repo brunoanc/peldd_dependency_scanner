@@ -1,10 +1,5 @@
 use clap::Parser;
-use lazy_static::lazy_static;
-use std::{path::Path, process::Command, sync::Mutex};
-
-lazy_static! {
-    static ref ACCESSED_FILES: Mutex<Vec<String>> = Mutex::new(vec![]);
-}
+use std::{collections::BTreeSet, path::Path, process::Command};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -23,25 +18,18 @@ struct Args {
 }
 
 impl Args {
-    pub fn get_all_dependencies(&self) -> Vec<String> {
-        self.get_all_dependencies_inner(&self.file)
+    pub fn get_all_dependencies(&self) -> BTreeSet<String> {
+        let mut visited = BTreeSet::new();
+        self.get_all_dependencies_inner(&self.file, &mut visited);
+        visited
     }
 
-    fn get_all_dependencies_inner(&self, file: &str) -> Vec<String> {
-        if let Ok(mut a) = ACCESSED_FILES.lock() {
-            if a.contains(&file.to_string()) {
-                if self.verbose > 1 {
-                    println!("File {} already tested.", file);
-                }
-                return vec![];
-            } else {
-                a.push(file.to_string());
+    fn get_all_dependencies_inner(&self, file: &str, visited: &mut BTreeSet<String>) {
+        if visited.insert(file.to_string()) {
+            if self.verbose > 1 {
+                println!("File {} already tested.", file);
             }
-        } else {
-            if self.verbose > 0 {
-                println!("Mutex has been poisoned!");
-            }
-            return vec![];
+            return;
         }
 
         let filepath = if let Some(path) = get_filepath(file, &self.dll_path) {
@@ -50,13 +38,12 @@ impl Args {
             if self.verbose > 0 {
                 println!("Couldn't find library {}", file);
             }
-            return vec![];
+            return;
         };
 
         if self.verbose > 0 {
             println!("Checking file {:?}.", &filepath);
         }
-        let mut f = vec![];
         let mut files = Command::new("peldd");
         let files = files.arg(&filepath);
         if let Ok(out) = files.output() {
@@ -64,7 +51,7 @@ impl Args {
             for file in string.lines() {
                 if self.full_path {
                     if let Some(a) = get_filepath(file, &self.dll_path) {
-                        f.push(a);
+                        visited.insert(a);
                     } else {
                         if self.verbose > 0 {
                             println!("Couldn't find library {}", file);
@@ -72,20 +59,17 @@ impl Args {
                         continue;
                     }
                 } else {
-                    f.push(file.to_string());
+                    visited.insert(file.to_string());
                 }
-                f.append(&mut self.get_all_dependencies_inner(file));
+                self.get_all_dependencies_inner(file, visited);
             }
         }
-        f
     }
 }
 
 fn main() {
     let args = Args::parse();
-    let mut deps = args.get_all_dependencies();
-    deps.sort();
-    deps.dedup();
+    let deps = args.get_all_dependencies();
     for v in deps {
         println!("{}", v);
     }
