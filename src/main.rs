@@ -15,63 +15,91 @@ struct Args {
     verbose: u8,
     #[clap(short, long)]
     full_path: bool,
+    /// End each output line with \0 instead of \n
+    /// Not setting this will error if any file paths contain \n
+    #[clap(short = '0', long)]
+    zero: bool,
 }
 
 impl Args {
-    pub fn get_all_dependencies(&self) -> BTreeSet<String> {
+    pub fn get_all_dependencies(&self) -> Result<BTreeSet<String>, ()> {
         let mut visited = BTreeSet::new();
-        self.get_all_dependencies_inner(&self.file, &mut visited);
-        visited
+        self.get_all_dependencies_inner(&self.file, &mut visited)?;
+        Ok(visited)
     }
 
-    fn get_all_dependencies_inner(&self, file: &str, visited: &mut BTreeSet<String>) {
+    fn get_all_dependencies_inner(
+        &self,
+        file: &str,
+        visited: &mut BTreeSet<String>,
+    ) -> Result<(), ()> {
         if visited.insert(file.to_string()) {
             if self.verbose > 1 {
-                println!("File {} already tested.", file);
+                eprintln!("File {} already tested.", file);
             }
-            return;
+            return Ok(());
         }
 
         let filepath = if let Some(path) = get_filepath(file, &self.dll_path) {
             path
         } else {
             if self.verbose > 0 {
-                println!("Couldn't find library {}", file);
+                eprintln!("Couldn't find library {}", file);
             }
-            return;
+            return Ok(());
         };
 
         if self.verbose > 0 {
-            println!("Checking file {:?}.", &filepath);
+            eprintln!("Checking file {:?}.", &filepath);
         }
-        let mut files = Command::new("peldd");
-        let files = files.arg(&filepath);
-        if let Ok(out) = files.output() {
-            let string = String::from_utf8_lossy(&out.stdout);
+        if let Ok(out) = Command::new("peldd").arg(&filepath).output() {
+            let string = match String::from_utf8(out.stdout) {
+                Ok(string) => string,
+                Err(_) => {
+                    eprintln!("`peldd` output is not valid UTF-8");
+                    return Err(());
+                }
+            };
             for file in string.lines() {
                 if self.full_path {
                     if let Some(a) = get_filepath(file, &self.dll_path) {
                         visited.insert(a);
                     } else {
                         if self.verbose > 0 {
-                            println!("Couldn't find library {}", file);
+                            eprintln!("Couldn't find library {}", file);
                         }
                         continue;
                     }
                 } else {
                     visited.insert(file.to_string());
                 }
-                self.get_all_dependencies_inner(file, visited);
+                self.get_all_dependencies_inner(file, visited)?;
             }
+        } else {
+            eprintln!("`peldd` command exited with non-zero status");
+            return Err(());
         }
+        Ok(())
     }
 }
 
 fn main() {
     let args = Args::parse();
-    let deps = args.get_all_dependencies();
+    let deps = match args.get_all_dependencies() {
+        Ok(deps) => deps,
+        Err(()) => std::process::exit(2),
+    };
+
     for v in deps {
-        println!("{}", v);
+        if args.zero {
+            print!("{}\0", v);
+        } else {
+            if v.contains('\n') {
+                eprintln!("Path '{}' contains line breaks, call with --zero", v);
+                std::process::exit(2);
+            }
+            println!("{}", v);
+        }
     }
 }
 
