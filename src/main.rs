@@ -4,7 +4,8 @@ use std::{collections::BTreeSet, path::Path, process::Command};
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
-    file: String,
+    #[clap(min_values = 1)]
+    files: Vec<String>,
     #[clap(
         short,
         long,
@@ -24,7 +25,9 @@ struct Args {
 impl Args {
     pub fn get_all_dependencies(&self) -> Result<BTreeSet<String>, ()> {
         let mut visited = BTreeSet::new();
-        self.get_all_dependencies_inner(&self.file, &mut visited)?;
+        for file in &self.files {
+            self.get_all_dependencies_inner(file, &mut visited)?;
+        }
         Ok(visited)
     }
 
