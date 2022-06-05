@@ -42,7 +42,7 @@ impl Args {
     ) -> Result<(), ()> {
         if !visited.insert(file.to_string()) {
             if self.verbose > 1 {
-                eprintln!("File {} already tested.", file);
+                eprintln!("File '{}' already tested.", file);
             }
             return Ok(());
         }
@@ -51,13 +51,13 @@ impl Args {
             path
         } else {
             if self.verbose > 0 {
-                eprintln!("Couldn't find library {}", file);
+                eprintln!("Couldn't find library '{}'", file);
             }
             return Ok(());
         };
 
         if self.verbose > 0 {
-            eprintln!("Checking file {:?}.", &filepath);
+            eprintln!("Checking file '{}'.", &filepath);
         }
         if let Ok(out) = Command::new("peldd").arg(&filepath).output() {
             let string = match String::from_utf8(out.stdout) {
@@ -68,12 +68,15 @@ impl Args {
                 }
             };
             for file in string.lines() {
+                if self.verbose > 1 {
+                    eprintln!("'{}' wants '{}'", filepath, file);
+                }
                 if self.full_path {
                     if let Some(a) = get_filepath(file, &self.dll_path) {
                         found.insert(a);
                     } else {
                         if self.verbose > 0 {
-                            eprintln!("Couldn't find library {}", file);
+                            eprintln!("Couldn't find library '{}'", file);
                         }
                         continue;
                     }
