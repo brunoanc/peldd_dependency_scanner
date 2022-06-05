@@ -25,18 +25,22 @@ struct Args {
 impl Args {
     pub fn get_all_dependencies(&self) -> Result<BTreeSet<String>, ()> {
         let mut visited = BTreeSet::new();
+        let mut found = BTreeSet::new();
         for file in &self.files {
-            self.get_all_dependencies_inner(file, &mut visited)?;
+            self.get_all_dependencies_inner(file, &mut visited, &mut found)?;
         }
-        Ok(visited)
+        Ok(found)
     }
 
     fn get_all_dependencies_inner(
         &self,
         file: &str,
+        /* Break up dependency cycles but tracking what we've already checked */
         visited: &mut BTreeSet<String>,
+        /* Collect our results in here */
+        found: &mut BTreeSet<String>,
     ) -> Result<(), ()> {
-        if visited.insert(file.to_string()) {
+        if !visited.insert(file.to_string()) {
             if self.verbose > 1 {
                 eprintln!("File {} already tested.", file);
             }
@@ -66,7 +70,7 @@ impl Args {
             for file in string.lines() {
                 if self.full_path {
                     if let Some(a) = get_filepath(file, &self.dll_path) {
-                        visited.insert(a);
+                        found.insert(a);
                     } else {
                         if self.verbose > 0 {
                             eprintln!("Couldn't find library {}", file);
@@ -74,9 +78,9 @@ impl Args {
                         continue;
                     }
                 } else {
-                    visited.insert(file.to_string());
+                    found.insert(file.to_string());
                 }
-                self.get_all_dependencies_inner(file, visited)?;
+                self.get_all_dependencies_inner(file, visited, found)?;
             }
         } else {
             eprintln!("`peldd` command exited with non-zero status");
