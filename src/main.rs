@@ -1,15 +1,11 @@
 use clap::Parser;
-use lazy_static::lazy_static;
-use std::{path::Path, process::Command, sync::Mutex};
-
-lazy_static! {
-    static ref ACCESSED_FILES: Mutex<Vec<String>> = Mutex::new(vec![]);
-}
+use std::{collections::BTreeSet, path::Path, process::Command};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
-    file: String,
+    #[clap(min_values = 1)]
+    files: Vec<String>,
     #[clap(
         short,
         long,
@@ -20,69 +16,101 @@ struct Args {
     verbose: u8,
     #[clap(short, long)]
     full_path: bool,
+    /// End each output line with \0 instead of \n
+    /// Not setting this will error if any file paths contain \n
+    #[clap(short = '0', long)]
+    zero: bool,
+}
+
+impl Args {
+    pub fn get_all_dependencies(&self) -> Result<BTreeSet<String>, ()> {
+        let mut visited = BTreeSet::new();
+        let mut found = BTreeSet::new();
+        for file in &self.files {
+            self.get_all_dependencies_inner(file, &mut visited, &mut found)?;
+        }
+        Ok(found)
+    }
+
+    fn get_all_dependencies_inner(
+        &self,
+        file: &str,
+        /* Break up dependency cycles but tracking what we've already checked */
+        visited: &mut BTreeSet<String>,
+        /* Collect our results in here */
+        found: &mut BTreeSet<String>,
+    ) -> Result<(), ()> {
+        if !visited.insert(file.to_string()) {
+            if self.verbose > 1 {
+                eprintln!("File '{}' already tested.", file);
+            }
+            return Ok(());
+        }
+
+        let filepath = if let Some(path) = get_filepath(file, &self.dll_path) {
+            path
+        } else {
+            if self.verbose > 0 {
+                eprintln!("Couldn't find library '{}'", file);
+            }
+            return Ok(());
+        };
+
+        if self.verbose > 0 {
+            eprintln!("Checking file '{}'.", &filepath);
+        }
+        if let Ok(out) = Command::new("peldd").arg(&filepath).output() {
+            let string = match String::from_utf8(out.stdout) {
+                Ok(string) => string,
+                Err(_) => {
+                    eprintln!("`peldd` output is not valid UTF-8");
+                    return Err(());
+                }
+            };
+            for file in string.lines() {
+                if self.verbose > 1 {
+                    eprintln!("'{}' wants '{}'", filepath, file);
+                }
+                if self.full_path {
+                    if let Some(a) = get_filepath(file, &self.dll_path) {
+                        found.insert(a);
+                    } else {
+                        if self.verbose > 0 {
+                            eprintln!("Couldn't find library '{}'", file);
+                        }
+                        continue;
+                    }
+                } else {
+                    found.insert(file.to_string());
+                }
+                self.get_all_dependencies_inner(file, visited, found)?;
+            }
+        } else {
+            eprintln!("`peldd` command exited with non-zero status");
+            return Err(());
+        }
+        Ok(())
+    }
 }
 
 fn main() {
     let args = Args::parse();
-    let mut deps = get_all_dependencies(&args, &args.file);
-    deps.sort();
-    deps.dedup();
-    for v in deps {
-        println!("{}", v);
-    }
-}
-
-fn get_all_dependencies(args: &Args, file: &str) -> Vec<String> {
-    if let Ok(mut a) = ACCESSED_FILES.lock() {
-        if a.contains(&file.to_string()) {
-            if args.verbose > 1 {
-                println!("File {} already tested.", file);
-            }
-            return vec![];
-        } else {
-            a.push(file.to_string());
-        }
-    } else {
-        if args.verbose > 0 {
-            println!("Mutex has been poisoned!");
-        }
-        return vec![];
-    }
-
-    let filepath = if let Some(path) = get_filepath(file, &args.dll_path) {
-        path
-    } else {
-        if args.verbose > 0 {
-            println!("Couldn't find library {}", file);
-        }
-        return vec![];
+    let deps = match args.get_all_dependencies() {
+        Ok(deps) => deps,
+        Err(()) => std::process::exit(2),
     };
 
-    if args.verbose > 0 {
-        println!("Checking file {:?}.", &filepath);
-    }
-    let mut f = vec![];
-    let mut files = Command::new("peldd");
-    let files = files.arg(&filepath);
-    if let Ok(out) = files.output() {
-        let string = String::from_utf8_lossy(&out.stdout);
-        for file in string.lines() {
-            if args.full_path {
-                if let Some(a) = get_filepath(file, &args.dll_path) {
-                    f.push(a);
-                } else {
-                    if args.verbose > 0 {
-                        println!("Couldn't find library {}", file);
-                    }
-                    continue;
-                }
-            } else {
-                f.push(file.to_string());
+    for v in deps {
+        if args.zero {
+            print!("{}\0", v);
+        } else {
+            if v.contains('\n') {
+                eprintln!("Path '{}' contains line breaks, call with --zero", v);
+                std::process::exit(2);
             }
-            f.append(&mut get_all_dependencies(args, file));
+            println!("{}", v);
         }
     }
-    f
 }
 
 fn get_filepath(file: &str, dll_path: &str) -> Option<String> {
