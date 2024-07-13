@@ -122,5 +122,5 @@ fn get_filepath(file: &str, dll_path: &str) -> Option<String> {
             return None;
         }
     }
-    Some(filepath.canonicalize().unwrap().display().to_string())
+    Some(filepath.display().to_string())
 }
